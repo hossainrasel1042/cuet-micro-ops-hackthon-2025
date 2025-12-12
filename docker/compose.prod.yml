@@ -11,4 +11,124 @@ services:
       - ../.env
     environment:
       - NODE_ENV=production
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY_ID=minioadmin
+      - S3_SECRET_ACCESS_KEY=minioadmin
+      - S3_BUCKET_NAME=downloads
+      - S3_FORCE_PATH_STYLE=true
+    depends_on:
+      - minio
+      - minio-create-bucket
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0" # Maximum 1 CPU core
+          memory: 512M # Maximum 512MB RAM
+        reservations:
+          cpus: "0.5" # Guaranteed 0.5 CPU core
+          memory: 256M # Guaranteed 256MB RAM
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0" # Maximum 2 CPU cores (MinIO can be CPU intensive)
+          memory: 2G # Maximum 2GB RAM
+        reservations:
+          cpus: "1.0" # Guaranteed 1 CPU core
+          memory: 1G # Guaranteed 1GB RAM
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  minio-create-bucket:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/downloads || true;
+      mc policy set public myminio/downloads || true;
+      echo 'Bucket created and configured successfully';
+      "
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2" # Maximum 0.2 CPU cores (init container)
+          memory: 128M # Maximum 128MB RAM
+        reservations:
+          cpus: "0.1" # Guaranteed 0.1 CPU core
+          memory: 64M
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    environment:
+      - VITE_API_URL=http://delineate-app:3000
+      - VITE_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    depends_on:
+      - delineate-app
+      - otel-collector
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.53
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - LOG_LEVEL=debug
+    ports:
+      - "16686:16686"
+    volumes:
+      - jaeger_data:/tmp
+    restart: unless-stopped # Guaranteed 64MB RAM
+
+volumes:
+  minio_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /opt/minio_data
+      o: bind
+  jaeger_data:

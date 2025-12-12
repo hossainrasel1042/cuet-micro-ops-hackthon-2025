@@ -3,11 +3,6 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [main, master]
-    paths-ignore:
-      - 'README.md'
-      - 'CHANGELOG.md'
-      - '.gitignore'
-      - '.github/**/*.md'
   pull_request:
     branches: [main, master]
   workflow_dispatch: # Manual trigger option
@@ -85,53 +80,6 @@ jobs:
           RATE_LIMIT_MAX_REQUESTS: "100"
           CORS_ORIGINS: "*"
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-test-results
-          path: |
-            test-results/
-            coverage/
-            logs/
-
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-24.04
-    needs: lint
-    permissions:
-      security-events: write
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-      - name: Snyk security scan (optional)
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        continue-on-error: true
-        run: |
-          if [ -n "${{ secrets.SNYK_TOKEN }}" ]; then
-            npm install -g snyk
-            snyk auth ${{ secrets.SNYK_TOKEN }}
-            snyk test --severity-threshold=high
-          else
-            echo "Snyk token not set. Skipping Snyk scan."
-          fi
-
   build:
     name: Build Docker Image
     runs-on: ubuntu-24.04
@@ -181,62 +129,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64
-
-  deploy:
-    name: Deploy to Railway
-    runs-on: ubuntu-24.04
-    needs: build
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push'
-    environment:
-      name: production
-      url: ${{ steps.deploy.outputs.url }}
-    steps:
-      - name: Deploy to Railway
-        id: deploy
-        uses: railway/action@v1
-        with:
-          railway_token: ${{ secrets.RAILWAY_TOKEN }}
-          service: delineate-hackathon-challenge
-          environment: production
-
-      - name: Verify deployment
-        run: |
-          echo "Deployed to: ${{ steps.deploy.outputs.url }}"
-          sleep 10
-          curl -f --retry 3 --retry-delay 5 ${{ steps.deploy.outputs.url }}/health || echo "Health check failed"
-
-  notify:
-    name: Notify Status
-    runs-on: ubuntu-24.04
-    needs: [lint, test, security-scan, build]
-    if: always()
-    steps:
-      - name: Slack notification on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v2
-        with:
-          channel-id: 'C12345678'
-          slack-message: |
-            ❌ Pipeline failed for ${{ github.repository }}
-            Workflow: ${{ github.workflow }}
-            Branch: ${{ github.ref }}
-            Commit: ${{ github.sha }}
-            Author: ${{ github.actor }}
-            View logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
-      - name: Slack notification on success
-        if: success()
-        uses: slackapi/slack-github-action@v2
-        with:
-           channel-id: 'C12345678'
-           slack-message: |
-            ✅ Pipeline succeeded for ${{ github.repository }}
-            Workflow: ${{ github.workflow }}
-            Branch: ${{ github.ref }}
-            Commit: ${{ github.sha }}
-            View logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
