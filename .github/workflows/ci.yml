@@ -86,7 +86,7 @@ jobs:
     needs: [test]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions:checkout@v4
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -128,3 +128,31 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-24.04
+    needs: [build]
+    # Only run deploy on successful push to main/master branch, not for PRs
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: |
+          npm install -g @railway/cli
+
+      - name: Set Railway Environment and Deploy
+        # Note: You should set a secret named RAILWAY_TOKEN in your repository secrets.
+        # This step logs in using the token and triggers a new deployment.
+        run: |
+          railway login --token ${{ secrets.RAILWAY_TOKEN }}
+          # The 'up' command will trigger a new deployment based on your existing Railway project settings.
+          # If you need to specify a service or environment, you may need a more complex command:
+          # e.g., railway up --service my-service --environment staging
+          railway up
+        env:
+          # Optional: Specify the Railway Project and Environment IDs if needed
+          RAILWAY_PROJECT: ${{ secrets.RAILWAY_PROJECT_ID }}
+          RAILWAY_ENVIRONMENT: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
