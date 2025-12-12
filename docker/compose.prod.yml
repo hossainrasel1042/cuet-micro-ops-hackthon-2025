@@ -57,11 +57,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0" # Maximum 2 CPU cores (MinIO can be CPU intensive)
-          memory: 2G # Maximum 2GB RAM
+          cpus: "2.0" 
+          memory: 2G 
         reservations:
-          cpus: "1.0" # Guaranteed 1 CPU core
-          memory: 1G # Guaranteed 1GB RAM
+          cpus: "1.0" 
+          memory: 1G 
     logging:
       driver: "json-file"
       options:
@@ -85,13 +85,13 @@ services:
       resources:
         limits:
           cpus: "0.2" # Maximum 0.2 CPU cores (init container)
-          memory: 128M # Maximum 128MB RAM
+          memory: 128M 
         reservations:
-          cpus: "0.1" # Guaranteed 0.1 CPU core
+          cpus: "0.1" 
           memory: 64M
   frontend:
     build:
-      context: ../frontend
+      context: ../../challenge/frontend
       dockerfile: Dockerfile
     ports:
       - "80:80"
@@ -122,7 +122,7 @@ services:
       - "16686:16686"
     volumes:
       - jaeger_data:/tmp
-    restart: unless-stopped # Guaranteed 64MB RAM
+    restart: unless-stopped 
 
 volumes:
   minio_data:
