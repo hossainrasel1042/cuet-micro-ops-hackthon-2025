@@ -106,9 +106,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # Only Docker Hub registry
+          # Only Docker Hub registry (must include username)
           images: |
-            delineate-hackathon-challenge
+            ${{ secrets.DOCKER_USERNAME }}/delineate-hackathon-challenge
           tags: |
             type=sha,prefix=,enable=true
             type=ref,event=branch
