@@ -1,14 +1,24 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - '.gitignore'
+      - '.github/**/*.md'
   pull_request:
     branches: [main, master]
+  workflow_dispatch: # Manual trigger option
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true # Fail-fast behavior
 
 jobs:
   lint:
-    name: Lint
+    name: Lint & Format
     runs-on: ubuntu-24.04
     container:
       image: node:24-slim
@@ -16,8 +26,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        id: npm-cache
+        with:
+          path: |
+            ~/.npm
+            node_modules
+            .next/cache
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
       - name: Install dependencies
-        run: npm ci
+        if: steps.npm-cache.outputs.cache-hit != 'true'
+        run: npm ci --prefer-offline --audit=false
 
       - name: Run ESLint
         run: npm run lint
@@ -35,16 +58,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+            .next/cache
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --prefer-offline
 
       - name: Run E2E tests
         run: npm run test:e2e
         env:
-          NODE_ENV: development
+          NODE_ENV: test
           PORT: 3000
           S3_REGION: us-east-1
-          S3_BUCKET_NAME: ""
+          S3_BUCKET_NAME: "test-bucket"
           S3_FORCE_PATH_STYLE: "true"
           SENTRY_DSN: ""
           OTEL_EXPORTER_OTLP_ENDPOINT: ""
@@ -53,23 +85,158 @@ jobs:
           RATE_LIMIT_MAX_REQUESTS: "100"
           CORS_ORIGINS: "*"
 
-  build:
-    name: Build Docker Image
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: |
+            test-results/
+            coverage/
+            logs/
+
+  security-scan:
+    name: Security Scan
     runs-on: ubuntu-24.04
-    needs: test
+    needs: lint
+    permissions:
+      security-events: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Snyk security scan (optional)
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        continue-on-error: true
+        run: |
+          if [ -n "${{ secrets.SNYK_TOKEN }}" ]; then
+            npm install -g snyk
+            snyk auth ${{ secrets.SNYK_TOKEN }}
+            snyk test --severity-threshold=high
+          else
+            echo "Snyk token not set. Skipping Snyk scan."
+          fi
+
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-24.04
+    needs: [test, security-scan]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            delineate-hackathon-challenge
+            ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=,enable=true
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile.prod
-          push: false
-          tags: delineate-hackathon-challenge:${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-24.04
+    needs: build
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push'
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - name: Deploy to Railway
+        id: deploy
+        uses: railway/action@v1
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          service: delineate-hackathon-challenge
+          environment: production
+
+      - name: Verify deployment
+        run: |
+          echo "Deployed to: ${{ steps.deploy.outputs.url }}"
+          sleep 10
+          curl -f --retry 3 --retry-delay 5 ${{ steps.deploy.outputs.url }}/health || echo "Health check failed"
+
+  notify:
+    name: Notify Status
+    runs-on: ubuntu-24.04
+    needs: [lint, test, security-scan, build]
+    if: always()
+    steps:
+      - name: Slack notification on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v2
+        with:
+          channel-id: 'C12345678'
+          slack-message: |
+            ❌ Pipeline failed for ${{ github.repository }}
+            Workflow: ${{ github.workflow }}
+            Branch: ${{ github.ref }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}
+            View logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+      - name: Slack notification on success
+        if: success()
+        uses: slackapi/slack-github-action@v2
+        with:
+           channel-id: 'C12345678'
+           slack-message: |
+            ✅ Pipeline succeeded for ${{ github.repository }}
+            Workflow: ${{ github.workflow }}
+            Branch: ${{ github.ref }}
+            Commit: ${{ github.sha }}
+            View logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
