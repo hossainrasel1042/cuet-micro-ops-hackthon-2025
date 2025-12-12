@@ -153,14 +153,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Railway CLI
+      - name: Debug deployment info
         run: |
-          npm install -g @railway/cli
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Branch: ${{ github.ref_name }}"
 
-      - name: Set Railway Environment and Deploy
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Railway
         run: |
           railway login --token ${{ secrets.RAILWAY_TOKEN }}
-          railway up
+          railway link ${{ secrets.RAILWAY_PROJECT_ID }}
+          railway up --service ${{ secrets.RAILWAY_SERVICE_NAME || 'web' }}
         env:
-          RAILWAY_PROJECT: ${{ secrets.RAILWAY_PROJECT_ID }}
-          RAILWAY_ENVIRONMENT: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
