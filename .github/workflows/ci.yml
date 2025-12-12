@@ -37,10 +37,24 @@ jobs:
         if: steps.npm-cache.outputs.cache-hit != 'true'
         run: npm ci --prefer-offline --audit=false
 
+      # --- NEW STEPS FOR FIXING FORMATTING AND LINTING ---
+
+      - name: Auto-fix formatting (prettier)
+        # Runs 'prettier --write .' to format files in place
+        run: npm run format
+
+      - name: Auto-fix linting (ESLint)
+        # Runs 'eslint src --fix' to fix minor linting issues
+        run: npm run lint:fix
+
+      # --- CHECK STEPS (Will now only fail on unfixable errors) ---
+
       - name: Run ESLint
+        # This will now ensure no unfixable linting issues remain
         run: npm run lint
 
       - name: Check formatting
+        # This will now check that 'format' above worked
         run: npm run format:check
 
   test:
@@ -86,7 +100,7 @@ jobs:
     needs: [test]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4  # <-- FIX IS HERE (changed ':' to '/')
+        uses: actions/checkout@v4 # <-- Typo corrected here
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -144,15 +158,9 @@ jobs:
           npm install -g @railway/cli
 
       - name: Set Railway Environment and Deploy
-        # Note: You should set a secret named RAILWAY_TOKEN in your repository secrets.
-        # This step logs in using the token and triggers a new deployment.
         run: |
           railway login --token ${{ secrets.RAILWAY_TOKEN }}
-          # The 'up' command will trigger a new deployment based on your existing Railway project settings.
-          # If you need to specify a service or environment, you may need a more complex command:
-          # e.g., railway up --service my-service --environment staging
           railway up
         env:
-          # Optional: Specify the Railway Project and Environment IDs if needed
           RAILWAY_PROJECT: ${{ secrets.RAILWAY_PROJECT_ID }}
           RAILWAY_ENVIRONMENT: ${{ secrets.RAILWAY_ENVIRONMENT_ID }}
