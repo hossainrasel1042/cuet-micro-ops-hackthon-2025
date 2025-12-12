@@ -39,7 +39,37 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3500:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitor
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5" 
+          memory: 256M 
+        reservations:
+          cpus: "0.2" 
+          memory: 128M 
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    ports:
+      - "8050:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - monitor
+    restart: unless-stopped
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -67,6 +97,31 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+  
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - monitor
+    restart: unless-stopped
+
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: node_exporter
+    pid: host
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - '/:/host:ro,rslave'
+    ports:
+      - "9500:9100"
+    networks:
+      - monitor
+    restart: unless-stopped
 
   minio-create-bucket:
     image: minio/mc:latest
@@ -88,19 +143,6 @@ services:
           memory: 128M 
         reservations:
           cpus: "0.1" 
-          memory: 64M
-  frontend:
-    build:
-      context: ../../challenge/frontend
-      dockerfile: Dockerfile
-    ports:
-      - "80:80"
-    environment:
-      - VITE_API_URL=http://delineate-app:3000
-      - VITE_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
-    depends_on:
-      - delineate-app
-      - otel-collector
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.96.0
@@ -123,6 +165,7 @@ services:
     volumes:
       - jaeger_data:/tmp
     restart: unless-stopped 
+    
 
 volumes:
   minio_data:
@@ -132,3 +175,7 @@ volumes:
       device: /opt/minio_data
       o: bind
   jaeger_data:
+  grafana-data:
+networks:
+  monitor:
+    driver: bridge
